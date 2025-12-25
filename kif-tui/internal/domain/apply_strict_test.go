@@ -173,3 +173,63 @@ func TestApplyMoveStrict_PawnMustPromoteOnLastRank(t *testing.T) {
 		t.Fatalf("expected nil, got %v", err)
 	}
 }
+
+func TestApplyMoveStrict_LanceMustPromoteOnLastRank(t *testing.T) {
+	// [lance-must-promote]
+	// 目的：香が1段目に進む場合、不成は禁止（成が強制）されることを確認する。
+	st := NewStateEmpty()
+	st.SideToMove = Black
+
+	// 先手の香：51 -> 51? ではなく、単純に 52 -> 51 の移動で作る
+	st.SetPieceAt(Square{File: 5, Rank: 2}, &Piece{Color: Black, Kind: 'L'})
+	from := Square{File: 5, Rank: 2}
+
+	// 不成はエラー
+	err := st.ApplyMoveStrict('L', &from, Square{File: 5, Rank: 1}, false, false)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	// 成はOK
+	err = st.ApplyMoveStrict('L', &from, Square{File: 5, Rank: 1}, true, false)
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestApplyMoveStrict_KnightMustPromoteOnLastTwoRanks(t *testing.T) {
+	// [knight-must-promote]
+	// 目的：桂が1-2段目に進む場合、不成は禁止（成が強制）されることを確認する。
+	st := NewStateEmpty()
+	st.SideToMove = Black
+
+	// 先手の桂：53 -> 41（=Rank1） / 53 -> 42（=Rank2）を作る
+	st.SetPieceAt(Square{File: 5, Rank: 3}, &Piece{Color: Black, Kind: 'N'})
+	from := Square{File: 5, Rank: 3}
+
+	// --- to Rank=1 (41) ---
+	err := st.ApplyMoveStrict('N', &from, Square{File: 4, Rank: 1}, false, false)
+	if err == nil {
+		t.Fatalf("expected error, got nil (to rank=1)")
+	}
+	err = st.ApplyMoveStrict('N', &from, Square{File: 4, Rank: 1}, true, false)
+	if err != nil {
+		t.Fatalf("expected nil, got %v (to rank=1)", err)
+	}
+
+	// 盤面が進んでいるので、再度初期化して Rank=2 のケース
+	st = NewStateEmpty()
+	st.SideToMove = Black
+	st.SetPieceAt(Square{File: 5, Rank: 3}, &Piece{Color: Black, Kind: 'N'})
+	from = Square{File: 5, Rank: 3}
+
+	// --- to Rank=2 (42) ---
+	err = st.ApplyMoveStrict('N', &from, Square{File: 4, Rank: 2}, false, false)
+	if err == nil {
+		t.Fatalf("expected error, got nil (to rank=2)")
+	}
+	err = st.ApplyMoveStrict('N', &from, Square{File: 4, Rank: 2}, true, false)
+	if err != nil {
+		t.Fatalf("expected nil, got %v (to rank=2)", err)
+	}
+}
