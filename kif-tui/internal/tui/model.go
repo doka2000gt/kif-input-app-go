@@ -24,6 +24,8 @@ type Model struct {
 	st            *domain.State
 	startSnapshot *domain.Snapshot // nil=EDIT, non-nil=PLAY
 
+	cursor domain.Square
+
 	m        mode
 	input    textinput.Model
 	logLines []string
@@ -44,9 +46,10 @@ func NewModel() Model {
 	st := domain.NewStateEmpty()
 
 	return Model{
-		st:    st,
-		m:     modeNormal,
-		input: ti,
+		st:     st,
+		cursor: domain.Square{File: 5, Rank: 5}, // 中央
+		m:      modeNormal,
+		input:  ti,
 		logLines: []string{
 			"ready (press i to input command)",
 		},
@@ -76,9 +79,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.Focus()
 				m.appendLog("INPUT mode")
 				return m, nil
-			default:
-				return m, nil
+
+			// --- cursor move ---
+			case "h", "left":
+				m.moveCursor(+1, 0)
+			case "l", "right":
+				m.moveCursor(-1, 0)
+			case "k", "up":
+				m.moveCursor(0, -1)
+			case "j", "down":
+				m.moveCursor(0, +1)
 			}
+
+			return m, nil
 
 		case modeInput:
 			switch msg.String() {
@@ -107,6 +120,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) moveCursor(df, dr int) {
+	f := m.cursor.File + df
+	r := m.cursor.Rank + dr
+
+	if f < 1 || f > 9 || r < 1 || r > 9 {
+		return // 盤外は無視
+	}
+
+	m.cursor = domain.Square{File: f, Rank: r}
 }
 
 func (m *Model) execCommand(line string) {
@@ -242,25 +266,42 @@ func (m Model) View() string {
 	if m.m == modeInput {
 		modeStr = "INPUT"
 	}
-
 	header := titleStyle.Render(fmt.Sprintf("kif-tui  [%s]  mode:%s", status, modeStr))
 
-	// ログ領域
-	logHeight := max(5, m.height-6)
+	// ---- Board (left pane) ----
+	boardBody := RenderBoard(m.st, m.cursor)
+
+	// 盤面は折り返しが致命的なので、十分に幅を確保する（Logパネルは狭くてもOK)
+	boardW := 38
+	boardBox := boxStyle.Width(boardW).Render(boardBody)
+
+	// 右は残り（最低幅だけ保証）
+	rightWidth := max(20, m.width-2-boardW-1)
+
+	logHeight := max(5, m.height-6) // keep similar to previous
 	logStart := max(0, len(m.logLines)-logHeight)
 	logBody := strings.Join(m.logLines[logStart:], "\n")
-	logBox := boxStyle.Width(max(20, m.width-2)).Height(logHeight).Render(logBody)
 
-	// 入力領域
+	// 長い行で横に崩れないように、右ペイン幅に収める
+	inner := lipgloss.NewStyle().Width(max(10, rightWidth-2)).Render(logBody)
+
+	logBox := boxStyle.Width(rightWidth).Height(logHeight).Render(inner)
+
+	// ---- Input (right-bottom) ----
 	var inputLine string
 	if m.m == modeInput {
 		inputLine = m.input.View()
 	} else {
 		inputLine = "press i to enter command"
 	}
-	inputBox := boxStyle.Width(max(20, m.width-2)).Render(inputLine)
+	inputBox := boxStyle.Width(rightWidth).Render(inputLine)
 
-	return header + "\n" + logBox + "\n" + inputBox + "\n"
+	rightPane := lipgloss.JoinVertical(lipgloss.Top, logBox, inputBox)
+
+	// Join 2 columns
+	body := lipgloss.JoinHorizontal(lipgloss.Top, boardBox, rightPane)
+
+	return header + "\n" + body + "\n"
 }
 
 func min(a, b int) int {
