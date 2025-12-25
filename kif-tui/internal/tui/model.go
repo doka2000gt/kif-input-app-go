@@ -117,7 +117,7 @@ func (m *Model) execCommand(line string) {
 		m.execNumeric(line)
 		return
 	}
-	
+
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return
@@ -129,6 +129,12 @@ func (m *Model) execCommand(line string) {
 		m.startSnapshot = &snap
 		m.st.Moves = nil
 		m.appendLog("game started (PLAY)")
+
+	case "setup":
+		// 平手初期局面をセット（EDITに戻す）
+		m.st = domain.NewStateHirate()
+		m.startSnapshot = nil
+		m.appendLog("setup hirate (EDIT)")
 
 	case "clear", "new", "reset":
 		m.st = domain.NewStateEmpty()
