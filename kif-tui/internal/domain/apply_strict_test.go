@@ -55,3 +55,50 @@ func TestApplyMoveStrict_DropPawnSameFileIsError(t *testing.T) {
 		t.Fatalf("expected error, got nil")
 	}
 }
+
+func TestApplyMoveStrict_DropPawnLastRankIsError(t *testing.T) {
+	// [drop-pawn-last-rank]
+	// 目的：歩を1段目に打てない（行き所のない駒）をStrictで保証する。
+	st := NewStateEmpty()
+	st.SideToMove = Black
+	st.Hands[Black] = map[PieceKind]int{'P': 1}
+
+	// 先手が 1段目（Rank=1）に歩打ちは禁止
+	err := st.ApplyMoveStrict('P', nil, Square{File: 5, Rank: 1}, false, true)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+}
+
+func TestApplyMoveStrict_DropLanceLastRankIsError(t *testing.T) {
+	// [drop-lance-last-rank]
+	// 目的：香を1段目に打てない（行き所のない駒）をStrictで保証する。
+	st := NewStateEmpty()
+	st.SideToMove = Black
+	st.Hands[Black] = map[PieceKind]int{'L': 1}
+
+	err := st.ApplyMoveStrict('L', nil, Square{File: 5, Rank: 1}, false, true)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+}
+
+func TestApplyMoveStrict_DropKnightLastTwoRanksIsError(t *testing.T) {
+	// [drop-knight-last-two-ranks]
+	// 目的：桂を1-2段目に打てない（行き所のない駒）をStrictで保証する。
+	st := NewStateEmpty()
+	st.SideToMove = Black
+	st.Hands[Black] = map[PieceKind]int{'N': 1}
+
+	// 先手：1段目
+	err := st.ApplyMoveStrict('N', nil, Square{File: 5, Rank: 1}, false, true)
+	if err == nil {
+		t.Fatalf("expected error, got nil (rank=1)")
+	}
+	// 先手：2段目
+	st.Hands[Black]['N'] = 1 // 消費されている可能性に備えて戻す
+	err = st.ApplyMoveStrict('N', nil, Square{File: 5, Rank: 2}, false, true)
+	if err == nil {
+		t.Fatalf("expected error, got nil (rank=2)")
+	}
+}

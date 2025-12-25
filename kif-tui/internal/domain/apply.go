@@ -160,6 +160,28 @@ func (st *State) ApplyMoveStrict(kind PieceKind, from *Square, to Square, promot
 		if kind == 'P' && st.hasPawnOnFile(st.SideToMove, to.File) {
 			return fmt.Errorf("double pawn on file: file=%d", to.File)
 		}
+		// 行き所のない駒の禁止（打ち）
+		// 先手視点：歩・香は1段目、桂は1-2段目に打てない。
+		// 後手視点：歩・香は9段目、桂は8-9段目に打てない。
+		if isDrop {
+			lastRank := 1
+			secondLastRank := 2
+			if st.SideToMove == White {
+				lastRank = 9
+				secondLastRank = 8
+			}
+
+			switch kind {
+			case 'P', 'L':
+				if to.Rank == lastRank {
+					return fmt.Errorf("illegal drop (no legal moves): %c to rank=%d", kind, to.Rank)
+				}
+			case 'N':
+				if to.Rank == lastRank || to.Rank == secondLastRank {
+					return fmt.Errorf("illegal drop (no legal moves): %c to rank=%d", kind, to.Rank)
+				}
+			}
+		}
 		// 「打ち」で成はできない
 		if promote {
 			return fmt.Errorf("cannot promote on drop: %c", kind)
