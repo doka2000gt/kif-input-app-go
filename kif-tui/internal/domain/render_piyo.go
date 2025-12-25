@@ -9,8 +9,14 @@ var pieceJP = map[PieceKind]string{
 var kindToPyo = map[[2]interface{}]string{
 	{'P', false}: "歩", {'L', false}: "香", {'N', false}: "桂", {'S', false}: "銀", {'G', false}: "金",
 	{'B', false}: "角", {'R', false}: "飛", {'K', false}: "玉",
-	{'P', true}: "と", {'L', true}: "成香", {'N', true}: "成桂", {'S', true}: "成銀",
-	{'B', true}: "馬", {'R', true}: "竜",
+
+	// promoted (Python版 KIND_TO_PYO に合わせる)
+	{'P', true}: "と",
+	{'L', true}: "杏",
+	{'N', true}: "圭",
+	{'S', true}: "全",
+	{'B', true}: "馬",
+	{'R', true}: "竜",
 }
 
 var rankKanji = map[int]string{

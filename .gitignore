@@ -18,3 +18,6 @@ go.work.sum
 *.swo
 .DS_Store
 Thumbs.db
+
+# Golden test temp outputs
+**/*.got.kif
