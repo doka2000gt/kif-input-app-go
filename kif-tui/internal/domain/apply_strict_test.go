@@ -102,3 +102,51 @@ func TestApplyMoveStrict_DropKnightLastTwoRanksIsError(t *testing.T) {
 		t.Fatalf("expected error, got nil (rank=2)")
 	}
 }
+
+func TestApplyMoveStrict_PromoteOutsideZoneIsError(t *testing.T) {
+	// [promote-outside-zone]
+	// 目的：敵陣に入っていない移動で Promote=true はエラーになることをStrictで保証する。
+	st := NewStateEmpty()
+	st.SideToMove = Black
+
+	// 先手の歩：77 -> 76（敵陣ではない）
+	st.SetPieceAt(Square{File: 7, Rank: 7}, &Piece{Color: Black, Kind: 'P'})
+	from := Square{File: 7, Rank: 7}
+
+	err := st.ApplyMoveStrict('P', &from, Square{File: 7, Rank: 6}, true, false)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+}
+
+func TestApplyMoveStrict_PromoteWhenEnteringZoneIsOK(t *testing.T) {
+	// [promote-entering-zone]
+	// 目的：敵陣に「入る」移動（to が敵陣）では Promote=true が許可されることを確認する。
+	st := NewStateEmpty()
+	st.SideToMove = Black
+
+	// 先手の歩：74 -> 73（to=3段目は先手の敵陣）
+	st.SetPieceAt(Square{File: 7, Rank: 4}, &Piece{Color: Black, Kind: 'P'})
+	from := Square{File: 7, Rank: 4}
+
+	err := st.ApplyMoveStrict('P', &from, Square{File: 7, Rank: 3}, true, false)
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestApplyMoveStrict_PromoteWhenLeavingZoneIsOK(t *testing.T) {
+	// [promote-leaving-zone]
+	// 目的：敵陣から「出る」移動（from が敵陣）でも Promote=true が許可されることを確認する。
+	st := NewStateEmpty()
+	st.SideToMove = Black
+
+	// 先手の歩：73 -> 74（from=3段目は先手の敵陣）
+	st.SetPieceAt(Square{File: 7, Rank: 3}, &Piece{Color: Black, Kind: 'P'})
+	from := Square{File: 7, Rank: 3}
+
+	err := st.ApplyMoveStrict('P', &from, Square{File: 7, Rank: 4}, true, false)
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}

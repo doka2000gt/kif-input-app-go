@@ -198,19 +198,22 @@ func (st *State) ApplyMoveStrict(kind PieceKind, from *Square, to Square, promot
 		if p.Color != st.SideToMove {
 			return fmt.Errorf("piece color mismatch")
 		}
-
 		// 自駒を取れない
 		dst := st.PieceAt(to)
 		if dst != nil && dst.Color == st.SideToMove {
 			return fmt.Errorf("cannot capture own piece: to=%v", to)
 		}
-
 		// 成れる駒だけ成れる
 		if promote && !isPromotable(kind) {
 			return fmt.Errorf("not promotable: %c", kind)
 		}
+		// 成は敵陣に入る／出るときだけ許可（from または to が敵陣）
+		if promote {
+			if !inPromotionZone(st.SideToMove, *from) && !inPromotionZone(st.SideToMove, to) {
+				return fmt.Errorf("promotion not allowed outside zone: from=%v to=%v", *from, to)
+			}
+		}
 	}
-
 	// 実際の更新は minimal に委譲
 	return st.ApplyMoveMinimal(kind, from, to, promote, isDrop)
 }
@@ -224,6 +227,15 @@ func isPromotable(kind PieceKind) bool {
 	default:
 		return false
 	}
+}
+
+func inPromotionZone(side Color, sq Square) bool {
+	// 先手：敵陣は 1〜3段目
+	// 後手：敵陣は 7〜9段目
+	if side == Black {
+		return sq.Rank >= 1 && sq.Rank <= 3
+	}
+	return sq.Rank >= 7 && sq.Rank <= 9
 }
 
 func (s *State) toggleSide() {
