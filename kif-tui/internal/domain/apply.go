@@ -213,6 +213,26 @@ func (st *State) ApplyMoveStrict(kind PieceKind, from *Square, to Square, promot
 				return fmt.Errorf("promotion not allowed outside zone: from=%v to=%v", *from, to)
 			}
 		}
+		// 不成だと行き所がなくなる駒は、成が強制
+		if !promote {
+			lastRank := 1
+			secondLastRank := 2
+			if st.SideToMove == White {
+				lastRank = 9
+				secondLastRank = 8
+			}
+
+			switch kind {
+			case 'P', 'L':
+				if to.Rank == lastRank {
+					return fmt.Errorf("must promote on last rank: %c", kind)
+				}
+			case 'N':
+				if to.Rank == lastRank || to.Rank == secondLastRank {
+					return fmt.Errorf("must promote on last ranks: %c", kind)
+				}
+			}
+		}
 	}
 	// 実際の更新は minimal に委譲
 	return st.ApplyMoveMinimal(kind, from, to, promote, isDrop)

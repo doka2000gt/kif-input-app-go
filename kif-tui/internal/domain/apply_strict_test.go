@@ -150,3 +150,26 @@ func TestApplyMoveStrict_PromoteWhenLeavingZoneIsOK(t *testing.T) {
 		t.Fatalf("expected nil, got %v", err)
 	}
 }
+
+func TestApplyMoveStrict_PawnMustPromoteOnLastRank(t *testing.T) {
+	// [pawn-must-promote]
+	// 目的：歩が1段目に進む場合、不成は禁止（成が強制）されることを確認する。
+	st := NewStateEmpty()
+	st.SideToMove = Black
+
+	// 先手の歩：72 -> 71
+	st.SetPieceAt(Square{File: 7, Rank: 2}, &Piece{Color: Black, Kind: 'P'})
+	from := Square{File: 7, Rank: 2}
+
+	// 不成はエラー
+	err := st.ApplyMoveStrict('P', &from, Square{File: 7, Rank: 1}, false, false)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	// 成はOK
+	err = st.ApplyMoveStrict('P', &from, Square{File: 7, Rank: 1}, true, false)
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
