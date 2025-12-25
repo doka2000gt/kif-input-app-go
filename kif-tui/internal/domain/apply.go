@@ -44,7 +44,7 @@ func (s *State) DropCandidates(to Square) []PieceKind {
 
 func (s *State) hasPawnOnFile(side Color, file int) bool {
 	for r := 1; r <= 9; r++ {
-		p := s.Board[file][r]
+		p := s.PieceAt(Square{File: file, Rank: r})
 		if p == nil {
 			continue
 		}
@@ -124,6 +124,84 @@ func (s *State) ApplyMoveMinimal(kind PieceKind, from *Square, to Square, promot
 	})
 	s.toggleSide()
 	return nil
+}
+
+// ApplyMoveStrict は、対局モード（指し手入力）向けの厳密適用。
+// - 打ちは空マス必須
+// - 自駒への着手禁止
+// - 移動元に駒が存在し、手番と一致すること
+// - Promote は「成れる駒」だけ（※成れる条件の厳密チェックは後で拡張）
+func (st *State) ApplyMoveStrict(kind PieceKind, from *Square, to Square, promote bool, isDrop bool) error {
+	st.ensureHands()
+
+	// 呼び出し側の指定ミスを吸収：from == nil なら必ず drop とみなす
+	isDrop = (from == nil)
+
+	// 盤外チェック
+	if to.File < 1 || to.File > 9 || to.Rank < 1 || to.Rank > 9 {
+		return fmt.Errorf("out of board: to=%v", to)
+	}
+	if from != nil {
+		if from.File < 1 || from.File > 9 || from.Rank < 1 || from.Rank > 9 {
+			return fmt.Errorf("out of board: from=%v", *from)
+		}
+	}
+
+	if isDrop {
+		// 打ちは空マス必須
+		if st.PieceAt(to) != nil {
+			return fmt.Errorf("drop to occupied square: to=%v", to)
+		}
+		// 持駒が必要
+		if st.Hands[st.SideToMove][kind] <= 0 {
+			return fmt.Errorf("no piece in hand: %c", kind)
+		}
+		// 二歩チェックはここ（歩打ちの場合のみ）
+		if kind == 'P' && st.hasPawnOnFile(st.SideToMove, to.File) {
+			return fmt.Errorf("double pawn on file: file=%d", to.File)
+		}
+		// 「打ち」で成はできない
+		if promote {
+			return fmt.Errorf("cannot promote on drop: %c", kind)
+		}
+	} else {
+		// 移動は from 必須
+		if from == nil {
+			return fmt.Errorf("missing from for move")
+		}
+		p := st.PieceAt(*from)
+		if p == nil {
+			return fmt.Errorf("no piece at from: %v", *from)
+		}
+		if p.Color != st.SideToMove {
+			return fmt.Errorf("piece color mismatch")
+		}
+
+		// 自駒を取れない
+		dst := st.PieceAt(to)
+		if dst != nil && dst.Color == st.SideToMove {
+			return fmt.Errorf("cannot capture own piece: to=%v", to)
+		}
+
+		// 成れる駒だけ成れる
+		if promote && !isPromotable(kind) {
+			return fmt.Errorf("not promotable: %c", kind)
+		}
+	}
+
+	// 実際の更新は minimal に委譲
+	return st.ApplyMoveMinimal(kind, from, to, promote, isDrop)
+}
+
+// 成れる駒（将棋の基本）
+// 歩香桂銀角飛のみ。金・玉は成れない。
+func isPromotable(kind PieceKind) bool {
+	switch kind {
+	case 'P', 'L', 'N', 'S', 'B', 'R':
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *State) toggleSide() {
