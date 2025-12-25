@@ -20,9 +20,13 @@ var pieceJP = map[domain.PieceKind]string{
 	'P': "歩", 'L': "香", 'N': "桂", 'S': "銀", 'G': "金", 'B': "角", 'R': "飛", 'K': "玉",
 }
 
-func NowYYYYMMDDHHMMSS() string {
+var NowFunc = func() string {
 	// Python版: YYYY/MM/DD HH:MM:SS
 	return time.Now().Format("2006/01/02 15:04:05")
+}
+
+func NowYYYYMMDDHHMMSS() string {
+	return NowFunc()
 }
 
 func SqToKIF(file, rank int) string {

@@ -1,7 +1,20 @@
-INPUT/
-OUTPUT/
-*.kif
-*.pos
-*.patch
-*.log
-*.jsonl
+# Go build artifacts
+/kif-tui/kif-tui
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go workspace (if used)
+go.work
+go.work.sum
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
