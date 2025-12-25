@@ -10,8 +10,12 @@ var reNumeric = regexp.MustCompile(`^\d{3,5}$`)
 
 // ParseNumeric replicates Python behavior:
 //   - "7776"  => normal move from 77 to 76
-//   - "77761" => normal move + promote flag
+//   - "77761" => normal move + promote flag (5th digit: 1=promote, 0=no promote)
 //   - "076"   => drop_pick to 76 (0 + file + rank)
+//
+// tag:
+//   - "move"      : from/to are set
+//   - "drop_pick" : from=nil, to is set (kind must be resolved by UI via candidates)
 func ParseNumeric(s string) (tag string, from *Square, to Square, promote bool, err error) {
 	if !reNumeric.MatchString(s) {
 		return "", nil, Square{}, false, fmt.Errorf("numeric input must be 3..5 digits")
@@ -38,22 +42,23 @@ func ParseNumeric(s string) (tag string, from *Square, to Square, promote bool, 
 		if ff < 1 || ff > 9 || fr < 1 || fr > 9 || tf < 1 || tf > 9 || tr < 1 || tr > 9 {
 			return "", nil, Square{}, false, fmt.Errorf("square out of range")
 		}
+
 		prom := false
 		if len(s) == 5 {
-			// last digit "1" means promote (Python版と同じ想定)
 			last := s[4]
 			if last == '1' {
 				prom = true
 			} else if last == '0' {
 				prom = false
 			} else {
-				// 互換性を優先して厳密に（必要なら緩められる）
 				return "", nil, Square{}, false, fmt.Errorf("5th digit must be 0 or 1")
 			}
 		}
+
 		fsq := Square{File: ff, Rank: fr}
 		tsq := Square{File: tf, Rank: tr}
 		return "move", &fsq, tsq, prom, nil
+
 	default:
 		return "", nil, Square{}, false, fmt.Errorf("unexpected length")
 	}

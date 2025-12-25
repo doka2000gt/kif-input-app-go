@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -30,6 +31,8 @@ type Model struct {
 	width  int
 	height int
 }
+
+var reNumericInput = regexp.MustCompile(`^\d{3,5}$`)
 
 func NewModel() Model {
 	ti := textinput.New()
@@ -108,6 +111,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) execCommand(line string) {
 	m.appendLog("> " + line)
+
+	// 数字入力（7776 / 77761 / 076）はコマンドより先に処理
+	if reNumericInput.MatchString(line) {
+		m.execNumeric(line)
+		return
+	}
+	
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return
@@ -142,6 +152,66 @@ func (m *Model) execCommand(line string) {
 
 	default:
 		m.appendLog(fmt.Sprintf("unknown command: %s", parts[0]))
+	}
+}
+
+func (m *Model) execNumeric(s string) {
+	// 対局モードでのみ有効（EDIT で数字入力したい仕様なら、ここを変える）
+	if !m.inPlay() {
+		m.appendLog("not in PLAY. use start first.")
+		return
+	}
+
+	tag, from, to, promote, err := domain.ParseNumeric(s)
+	if err != nil {
+		m.appendLog(fmt.Sprintf("invalid numeric: %v", err))
+		return
+	}
+
+	switch tag {
+	case "drop_pick":
+		// 076: 駒種が入力にないので候補から決める
+		cands := m.st.DropCandidates(to)
+		if len(cands) == 0 {
+			m.appendLog(fmt.Sprintf("drop: no candidates to=%v", to))
+			return
+		}
+		if len(cands) > 1 {
+			// 次ステップで picker UI にする（今はログ表示で止める）
+			m.appendLog(fmt.Sprintf("drop ambiguous at %v: candidates=%v", to, cands))
+			return
+		}
+
+		kind := cands[0]
+		if err := m.st.ApplyMoveStrict(kind, nil, to, false, true); err != nil {
+			m.appendLog(fmt.Sprintf("drop failed: %v", err))
+			return
+		}
+		m.appendLog(fmt.Sprintf("drop %c to %v", kind, to))
+		return
+
+	case "move":
+		if from == nil {
+			m.appendLog("internal error: from is nil")
+			return
+		}
+		p := m.st.PieceAt(*from)
+		if p == nil {
+			m.appendLog(fmt.Sprintf("no piece at from: %v", *from))
+			return
+		}
+		kind := p.Kind
+
+		if err := m.st.ApplyMoveStrict(kind, from, to, promote, false); err != nil {
+			m.appendLog(fmt.Sprintf("move failed: %v", err))
+			return
+		}
+		m.appendLog(fmt.Sprintf("move %v->%v promote=%v", *from, to, promote))
+		return
+
+	default:
+		m.appendLog(fmt.Sprintf("unknown numeric tag: %s", tag))
+		return
 	}
 }
 
