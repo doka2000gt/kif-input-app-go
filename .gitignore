@@ -1,0 +1,7 @@
+INPUT/
+OUTPUT/
+*.kif
+*.pos
+*.patch
+*.log
+*.jsonl
