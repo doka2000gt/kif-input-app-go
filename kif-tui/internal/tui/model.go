@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -19,6 +20,7 @@ const (
 	modeNormal mode = iota
 	modeInput
 	modePicker
+	modeHandEdit
 )
 
 // PlaceState represents the "continuous placement" mode state (EDIT only).
@@ -52,13 +54,22 @@ type Model struct {
 	pickerIdx   int
 	pickerTitle string
 	pickerItems []string
-	pickerMode  string // "place" / "drop" / "hand" ... (用途識別)
+	pickerMode  string // "place" / "drop" / "hand" ...
 
 	// picker payload for drop selection
-	pickerDropTo domain.Square
+	pickerDropTo    domain.Square
+	pickerDropCands []domain.PieceKind // drop候補（表示と確定の順序を固定するため保持）
+
+	// hand edit
+	handEditKind domain.PieceKind
 }
 
+// 数字入力（7776 / 77761 / 076）判定
 var reNumericInput = regexp.MustCompile(`^\d{3,5}$`)
+
+// hand edit: "B=2 W=0" / "b=2 w=0" / "2 0" を許す（簡易）
+var reHandEdit = regexp.MustCompile(`(?i)^\s*(?:B\s*=\s*(\d+)\s*)?(?:\s*[,; ]\s*)?(?:W\s*=\s*(\d+)\s*)?\s*$`)
+var reTwoNums = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s*$`)
 
 func NewModel() Model {
 	ti := textinput.New()
@@ -85,10 +96,14 @@ func NewModel() Model {
 		logLines: []string{
 			"ready (press i to input command)",
 		},
+
 		pickerTitle:  "",
 		pickerItems:  nil,
 		pickerMode:   "",
 		pickerDropTo: domain.Square{File: 0, Rank: 0},
+
+		pickerDropCands: nil,
+		handEditKind:    'P',
 	}
 }
 
@@ -188,40 +203,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.st.SetPieceAt(m.cursor, nil)
 				}
 
-			// Tab を押したら picker を開く
+			// Tab: open "piece picker" (EDIT only)
 			case "tab":
 				if m.place.On && !m.inPlay() {
-					m.m = modePicker
-					m.pickerOn = true
-					m.pickerMode = "place"
-					m.pickerTitle = "Piece Picker"
-					m.pickerItems = pieceOptionItems()
-
-					// 現在のKindに合わせて初期選択
-					m.pickerIdx = 0
-					for i, k := range pieceOptions {
-						if k == m.place.Kind {
-							m.pickerIdx = i
-							break
-						}
-					}
-					m.appendLog("picker ON (j/k or up/down, enter select, esc/tab close)")
+					m.openPickerPlace()
 					return m, nil
 				}
 
-			// H モード
+			// H: open "hands picker" (EDIT only)
 			case "H":
 				if !m.inPlay() {
-					m.m = modePicker
-					m.pickerOn = true
-					m.pickerMode = "hand"
-					m.pickerTitle = "Hands"
-					m.pickerItems = handItems(m.st)
-					m.pickerIdx = 0
-					m.appendLog("hands picker ON (j/k or up/down, enter TBD, esc/tab close)")
+					m.openPickerHand()
 					return m, nil
 				}
-
 			}
 
 			return m, nil
@@ -256,23 +250,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 
 		// ----------------------------
-		// Picker
+		// Picker (generic)
 		// ----------------------------
 		case modePicker:
 			switch msg.String() {
 			case "esc", "tab":
-				m.m = modeNormal
-				m.pickerOn = false
-				m.appendLog("picker OFF")
-				m.pickerDropTo = domain.Square{File: 0, Rank: 0}
+				m.closePicker("picker OFF")
 				return m, nil
 
 			case "k", "up":
-				m.pickerIdx = clamp(m.pickerIdx-1, 0, len(pieceOptions)-1)
+				m.pickerIdx = clamp(m.pickerIdx-1, 0, max(0, len(m.pickerItems)-1))
 				return m, nil
 
 			case "j", "down":
-				m.pickerIdx = clamp(m.pickerIdx+1, 0, len(pieceOptions)-1)
+				m.pickerIdx = clamp(m.pickerIdx+1, 0, max(0, len(m.pickerItems)-1))
 				return m, nil
 
 			case "enter":
@@ -285,43 +276,100 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else {
 						m.appendLog("picker select: out of range")
 					}
+					m.closePicker("")
+					return m, nil
 
 				case "drop":
-					to := m.pickerDropTo
-					cands := m.st.DropCandidates(to)
-					if len(cands) == 0 {
-						m.appendLog(fmt.Sprintf("drop: no candidates to=%v", to))
-						break
+					// drop確定（候補は保持している順序で確定）
+					if len(m.pickerDropCands) == 0 {
+						m.appendLog("drop: no candidates")
+						m.closePicker("")
+						return m, nil
 					}
-					if m.pickerIdx < 0 || m.pickerIdx >= len(cands) {
+					if m.pickerIdx < 0 || m.pickerIdx >= len(m.pickerDropCands) {
 						m.appendLog("drop: selection out of range")
-						break
+						m.closePicker("")
+						return m, nil
 					}
-
-					kind := cands[m.pickerIdx]
+					to := m.pickerDropTo
+					kind := m.pickerDropCands[m.pickerIdx]
 					if err := m.st.ApplyMoveStrict(kind, nil, to, false, true); err != nil {
 						m.appendLog(fmt.Sprintf("drop failed: %v", err))
-						break
+						m.closePicker("")
+						return m, nil
 					}
 					m.appendLog(fmt.Sprintf("drop %c to %v", kind, to))
+					m.closePicker("")
+					return m, nil
 
 				case "hand":
-					// ここでは骨組みだけ：次ステップで枚数編集UIを入れる
-					m.appendLog("hands picker: enter action is not implemented yet")
+					// 選択中の駒種を決める → hand editへ
+					if m.pickerIdx < 0 || m.pickerIdx >= len(pieceOptions) {
+						m.appendLog("hand: selection out of range")
+						m.closePicker("")
+						return m, nil
+					}
+					m.handEditKind = pieceOptions[m.pickerIdx]
+					m.m = modeHandEdit
+
+					// 入力欄を hand edit 用に使う（幅やstyleはそのまま）
+					b := m.st.Hands[domain.Black][m.handEditKind]
+					w := m.st.Hands[domain.White][m.handEditKind]
+					m.input.SetValue(fmt.Sprintf("B=%d W=%d", b, w))
+					m.input.Focus()
+					m.appendLog(fmt.Sprintf("hand edit: %c (enter to apply / esc to cancel)", m.handEditKind))
+					return m, nil
 
 				default:
 					m.appendLog("picker: unhandled mode: " + m.pickerMode)
+					m.closePicker("")
+					return m, nil
 				}
-
-				// picker終了
-				m.m = modeNormal
-				m.pickerOn = false
-				return m, nil
 			}
 			return m, nil
+
+		// ----------------------------
+		// Hand edit (after selecting a kind in H picker)
+		// ----------------------------
+		case modeHandEdit:
+			switch msg.String() {
+			case "esc":
+				// cancel
+				m.input.Blur()
+				m.m = modeNormal
+				m.closePicker("hand edit cancelled")
+				return m, nil
+
+			case "enter":
+				line := strings.TrimSpace(m.input.Value())
+				b, w, err := parseHandEditLine(line)
+				if err != nil {
+					m.appendLog("hand edit invalid: " + err.Error())
+					// stay in handEdit
+					return m, nil
+				}
+				if err := validateHandCount(m.handEditKind, b, w); err != nil {
+					m.appendLog("hand edit invalid: " + err.Error())
+					return m, nil
+				}
+
+				m.st.Hands[domain.Black][m.handEditKind] = b
+				m.st.Hands[domain.White][m.handEditKind] = w
+
+				m.input.Blur()
+				m.m = modeNormal
+				m.closePicker(fmt.Sprintf("hand set: %c (B=%d W=%d)", m.handEditKind, b, w))
+				return m, nil
+			}
+
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
 		}
+
 		return m, nil
 	}
+
 	return m, nil
 }
 
@@ -332,12 +380,11 @@ func (m *Model) moveCursor(df, dr int) {
 	if f < 1 || f > 9 || r < 1 || r > 9 {
 		return // 盤外は無視
 	}
-
 	m.cursor = domain.Square{File: f, Rank: r}
 }
 
 // placeAtCursor places the current "next piece" to the cursor square.
-// After placement, it resets the "next piece" state (Python版挙動に寄せる).
+// After placement, it resets the "next piece" state.
 func (m *Model) placeAtCursor() {
 	// PLAY なら何もしない
 	if m.inPlay() {
@@ -413,7 +460,7 @@ func (m *Model) execCommand(line string) {
 }
 
 func (m *Model) execNumeric(s string) {
-	// 対局モードでのみ有効（EDIT で数字入力したい仕様なら、ここを変える）
+	// 対局モードでのみ有効（EDITで数字入力を使いたいならここを変える）
 	if !m.inPlay() {
 		m.appendLog("not in PLAY. use start first.")
 		return
@@ -435,17 +482,7 @@ func (m *Model) execNumeric(s string) {
 		}
 		if len(cands) > 1 {
 			// open picker to choose which piece to drop
-			m.m = modePicker
-			m.pickerOn = true
-			m.pickerMode = "drop"
-			m.pickerTitle = fmt.Sprintf("Drop Candidates to %d%d", to.File, to.Rank)
-			m.pickerItems = dropCandidateItems(cands)
-			m.pickerIdx = 0
-			m.pickerDropTo = to
-
-			// store candidates temporarily in pickerItems only; selection will map back by index
-			// (we will re-compute candidates on enter for safety)
-			m.appendLog("drop ambiguous: select piece to drop")
+			m.openPickerDrop(to, cands)
 			return
 		}
 
@@ -482,6 +519,61 @@ func (m *Model) execNumeric(s string) {
 	}
 }
 
+func (m *Model) openPickerPlace() {
+	m.m = modePicker
+	m.pickerOn = true
+	m.pickerMode = "place"
+	m.pickerTitle = "Piece Picker"
+	m.pickerItems = pieceOptionItems()
+
+	// 現在のKindに合わせて初期選択
+	m.pickerIdx = 0
+	for i, k := range pieceOptions {
+		if k == m.place.Kind {
+			m.pickerIdx = i
+			break
+		}
+	}
+	m.appendLog("picker ON (j/k or up/down, enter select, esc/tab close)")
+}
+
+func (m *Model) openPickerHand() {
+	m.m = modePicker
+	m.pickerOn = true
+	m.pickerMode = "hand"
+	m.pickerTitle = "Hands"
+	m.pickerItems = handItems(m.st)
+	m.pickerIdx = 0
+	m.appendLog("hands picker ON (enter to edit counts, esc/tab close)")
+}
+
+func (m *Model) openPickerDrop(to domain.Square, cands []domain.PieceKind) {
+	m.m = modePicker
+	m.pickerOn = true
+	m.pickerMode = "drop"
+	m.pickerTitle = fmt.Sprintf("Drop Candidates to %d%d", to.File, to.Rank)
+	m.pickerItems = dropCandidateItems(cands)
+	m.pickerIdx = 0
+	m.pickerDropTo = to
+	m.pickerDropCands = append([]domain.PieceKind(nil), cands...) // defensive copy
+	m.appendLog("drop ambiguous: select piece to drop")
+}
+
+func (m *Model) closePicker(logLine string) {
+	m.pickerOn = false
+	m.pickerIdx = 0
+	m.pickerTitle = ""
+	m.pickerItems = nil
+	m.pickerMode = ""
+
+	m.pickerDropTo = domain.Square{File: 0, Rank: 0}
+	m.pickerDropCands = nil
+
+	if logLine != "" {
+		m.appendLog(logLine)
+	}
+}
+
 func (m *Model) appendLog(s string) {
 	m.logLines = append(m.logLines, s)
 	if len(m.logLines) > 200 {
@@ -500,8 +592,13 @@ func (m Model) View() string {
 		status = "PLAY"
 	}
 	modeStr := "NORMAL"
-	if m.m == modeInput {
+	switch m.m {
+	case modeInput:
 		modeStr = "INPUT"
+	case modePicker:
+		modeStr = "PICKER"
+	case modeHandEdit:
+		modeStr = "HAND-EDIT"
 	}
 	header := titleStyle.Render(fmt.Sprintf("kif-tui  [%s]  mode:%s", status, modeStr))
 
@@ -527,7 +624,7 @@ func (m Model) View() string {
 	next := domain.Piece{Color: m.place.Color, Kind: m.place.Kind, Prom: m.place.Promote}
 	boardBody := RenderBoard(m.st, m.cursor, m.place.On && !m.inPlay(), next)
 
-	// 盤面は折り返しが致命的なので、十分に幅を確保する（Logパネルは狭くてもOK)
+	// 盤面は折り返しが致命的なので、十分に幅を確保する（Logパネルは狭くてもOK）
 	boardW := 38
 	boardBox := boxStyle.Width(boardW).Render(boardBody)
 
@@ -544,7 +641,7 @@ func (m Model) View() string {
 
 	// ---- Input (right-bottom) ----
 	var inputLine string
-	if m.m == modeInput {
+	if m.m == modeInput || m.m == modeHandEdit {
 		inputLine = m.input.View()
 	} else {
 		inputLine = "press i to enter command"
@@ -555,7 +652,6 @@ func (m Model) View() string {
 
 	if m.pickerOn {
 		pickerBox := boxStyle.Width(rightWidth).Render(renderPicker(m.pickerTitle, m.pickerItems, m.pickerIdx))
-
 		rightPane = lipgloss.JoinVertical(lipgloss.Top, logBox, pickerBox, inputBox)
 	}
 
@@ -565,7 +661,7 @@ func (m Model) View() string {
 	return header + "\n" + placeStatus + "\n" + body + "\n"
 }
 
-// 駒配置ピッカー
+// 駒配置ピッカーの基本順
 var pieceOptions = []domain.PieceKind{'P', 'L', 'N', 'S', 'G', 'B', 'R', 'K'}
 
 func pieceOptionItems() []string {
@@ -594,16 +690,6 @@ func dropCandidateItems(cands []domain.PieceKind) []string {
 	return items
 }
 
-func clamp(n, lo, hi int) int {
-	if n < lo {
-		return lo
-	}
-	if n > hi {
-		return hi
-	}
-	return n
-}
-
 func renderPicker(title string, items []string, idx int) string {
 	var b strings.Builder
 	b.WriteString(title + "\n")
@@ -618,13 +704,60 @@ func renderPicker(title string, items []string, idx int) string {
 	return b.String()
 }
 
+func parseHandEditLine(s string) (b int, w int, err error) {
+	// "2 0"
+	if m := reTwoNums.FindStringSubmatch(s); m != nil {
+		bi, _ := strconv.Atoi(m[1])
+		wi, _ := strconv.Atoi(m[2])
+		return bi, wi, nil
+	}
+
+	// "B=2 W=0"（B省略 / W省略も一応許すが、片方省略時は 0 扱い）
+	m := reHandEdit.FindStringSubmatch(s)
+	if m == nil {
+		return 0, 0, fmt.Errorf(`format: "B=2 W=0" or "2 0"`)
+	}
+	b = 0
+	w = 0
+	if m[1] != "" {
+		b, _ = strconv.Atoi(m[1])
+	}
+	if m[2] != "" {
+		w, _ = strconv.Atoi(m[2])
+	}
+	return b, w, nil
+}
+
+func validateHandCount(kind domain.PieceKind, b, w int) error {
+	if b < 0 || w < 0 {
+		return fmt.Errorf("counts must be >= 0")
+	}
+	// 一旦ざっくり上限（将棋の駒総数的に十分大きい値）
+	// ※最終的には駒種ごとの上限（歩18など）を入れるのが理想
+	const maxAny = 18
+	if b > maxAny || w > maxAny {
+		return fmt.Errorf("too many pieces: max=%d", maxAny)
+	}
+	_ = kind
+	return nil
+}
+
+func clamp(n, lo, hi int) int {
+	if n < lo {
+		return lo
+	}
+	if n > hi {
+		return hi
+	}
+	return n
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
 }
-
 func max(a, b int) int {
 	if a > b {
 		return a
