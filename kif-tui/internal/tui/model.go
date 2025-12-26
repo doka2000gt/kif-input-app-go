@@ -18,6 +18,7 @@ type mode int
 const (
 	modeNormal mode = iota
 	modeInput
+	modePicker
 )
 
 // PlaceState represents the "continuous placement" mode state (EDIT only).
@@ -45,6 +46,9 @@ type Model struct {
 
 	width  int
 	height int
+
+	pickerOn  bool
+	pickerIdx int
 }
 
 var reNumericInput = regexp.MustCompile(`^\d{3,5}$`)
@@ -67,8 +71,10 @@ func NewModel() Model {
 			Kind:    'P',
 			Promote: false,
 		},
-		m:     modeNormal,
-		input: ti,
+		pickerOn:  false,
+		pickerIdx: 0,
+		m:         modeNormal,
+		input:     ti,
 		logLines: []string{
 			"ready (press i to input command)",
 		},
@@ -125,7 +131,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.place.On = !m.place.On
 				if m.place.On {
-					m.appendLog("placement ON (P/L/N/S/G/B/R/K, v toggle, + promote, space/enter place, x delete)")
+					m.appendLog("placement ON (Tab picker, L/N/S/G/B/R/K, v toggle, + promote, space/enter place, x delete)")
 				} else {
 					m.appendLog("placement OFF")
 				}
@@ -151,10 +157,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.place.Kind = domain.PieceKind(msg.String()[0])
 					m.placeAtCursor()
 				}
+
 			// 歩は小文字p
 			case "p":
 				if m.place.On && !m.inPlay() {
-					m.place.Kind = 'p'
+					m.place.Kind = 'P'
 					m.placeAtCursor()
 				}
 
@@ -169,6 +176,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.place.On && !m.inPlay() {
 					m.st.SetPieceAt(m.cursor, nil)
 				}
+
+			// Tab を押したら picker を開く
+			case "tab":
+				if m.place.On && !m.inPlay() {
+					m.m = modePicker
+					m.pickerOn = true
+					// 現在のKindに合わせて初期選択
+					m.pickerIdx = 0
+					for i, k := range pieceOptions {
+						if k == m.place.Kind {
+							m.pickerIdx = i
+							break
+						}
+					}
+					m.appendLog("picker ON (j/k or up/down, enter select, esc/tab close)")
+					return m, nil
+				}
+
 			}
 
 			return m, nil
@@ -201,7 +226,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			return m, cmd
+
+		// ----------------------------
+		// Picker
+		// ----------------------------
+		case modePicker:
+			switch msg.String() {
+			case "esc", "tab":
+				m.m = modeNormal
+				m.pickerOn = false
+				m.appendLog("picker OFF")
+				return m, nil
+
+			case "k", "up":
+				m.pickerIdx = clamp(m.pickerIdx-1, 0, len(pieceOptions)-1)
+				return m, nil
+
+			case "j", "down":
+				m.pickerIdx = clamp(m.pickerIdx+1, 0, len(pieceOptions)-1)
+				return m, nil
+
+			case "enter":
+				// 選択確定：next piece を変更
+				m.place.Kind = pieceOptions[m.pickerIdx]
+
+				// picker終了
+				m.m = modeNormal
+				m.pickerOn = false
+				m.appendLog(fmt.Sprintf("picker select: %c", m.place.Kind))
+				return m, nil
+			}
+			return m, nil
 		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -424,10 +481,42 @@ func (m Model) View() string {
 
 	rightPane := lipgloss.JoinVertical(lipgloss.Top, logBox, inputBox)
 
+	if m.pickerOn {
+		pickerBox := boxStyle.Width(rightWidth).Render(renderPicker(m.pickerIdx))
+		rightPane = lipgloss.JoinVertical(lipgloss.Top, logBox, pickerBox, inputBox)
+	}
+
 	// Join 2 columns
 	body := lipgloss.JoinHorizontal(lipgloss.Top, boardBox, rightPane)
 
 	return header + "\n" + placeStatus + "\n" + body + "\n"
+}
+
+// 駒配置ピッカー
+var pieceOptions = []domain.PieceKind{'P', 'L', 'N', 'S', 'G', 'B', 'R', 'K'}
+
+func clamp(n, lo, hi int) int {
+	if n < lo {
+		return lo
+	}
+	if n > hi {
+		return hi
+	}
+	return n
+}
+
+func renderPicker(idx int) string {
+	var b strings.Builder
+	b.WriteString("Piece Picker\n")
+	b.WriteString("------------\n")
+	for i, k := range pieceOptions {
+		prefix := "  "
+		if i == idx {
+			prefix = "> "
+		}
+		b.WriteString(prefix + string(k) + "\n")
+	}
+	return b.String()
 }
 
 func min(a, b int) int {
