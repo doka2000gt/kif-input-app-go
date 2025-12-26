@@ -53,6 +53,9 @@ type Model struct {
 	pickerTitle string
 	pickerItems []string
 	pickerMode  string // "place" / "drop" / "hand" ... (用途識別)
+
+	// picker payload for drop selection
+	pickerDropTo domain.Square
 }
 
 var reNumericInput = regexp.MustCompile(`^\d{3,5}$`)
@@ -82,9 +85,10 @@ func NewModel() Model {
 		logLines: []string{
 			"ready (press i to input command)",
 		},
-		pickerTitle: "",
-		pickerItems: nil,
-		pickerMode:  "",
+		pickerTitle:  "",
+		pickerItems:  nil,
+		pickerMode:   "",
+		pickerDropTo: domain.Square{File: 0, Rank: 0},
 	}
 }
 
@@ -205,6 +209,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 
+			// H モード
+			case "H":
+				if !m.inPlay() {
+					m.m = modePicker
+					m.pickerOn = true
+					m.pickerMode = "hand"
+					m.pickerTitle = "Hands"
+					m.pickerItems = handItems(m.st)
+					m.pickerIdx = 0
+					m.appendLog("hands picker ON (j/k or up/down, enter TBD, esc/tab close)")
+					return m, nil
+				}
+
 			}
 
 			return m, nil
@@ -247,6 +264,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.m = modeNormal
 				m.pickerOn = false
 				m.appendLog("picker OFF")
+				m.pickerDropTo = domain.Square{File: 0, Rank: 0}
 				return m, nil
 
 			case "k", "up":
@@ -267,6 +285,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else {
 						m.appendLog("picker select: out of range")
 					}
+
+				case "drop":
+					to := m.pickerDropTo
+					cands := m.st.DropCandidates(to)
+					if len(cands) == 0 {
+						m.appendLog(fmt.Sprintf("drop: no candidates to=%v", to))
+						break
+					}
+					if m.pickerIdx < 0 || m.pickerIdx >= len(cands) {
+						m.appendLog("drop: selection out of range")
+						break
+					}
+
+					kind := cands[m.pickerIdx]
+					if err := m.st.ApplyMoveStrict(kind, nil, to, false, true); err != nil {
+						m.appendLog(fmt.Sprintf("drop failed: %v", err))
+						break
+					}
+					m.appendLog(fmt.Sprintf("drop %c to %v", kind, to))
+
+				case "hand":
+					// ここでは骨組みだけ：次ステップで枚数編集UIを入れる
+					m.appendLog("hands picker: enter action is not implemented yet")
+
 				default:
 					m.appendLog("picker: unhandled mode: " + m.pickerMode)
 				}
@@ -392,8 +434,18 @@ func (m *Model) execNumeric(s string) {
 			return
 		}
 		if len(cands) > 1 {
-			// 次ステップで picker UI にする（今はログ表示で止める）
-			m.appendLog(fmt.Sprintf("drop ambiguous at %v: candidates=%v", to, cands))
+			// open picker to choose which piece to drop
+			m.m = modePicker
+			m.pickerOn = true
+			m.pickerMode = "drop"
+			m.pickerTitle = fmt.Sprintf("Drop Candidates to %d%d", to.File, to.Rank)
+			m.pickerItems = dropCandidateItems(cands)
+			m.pickerIdx = 0
+			m.pickerDropTo = to
+
+			// store candidates temporarily in pickerItems only; selection will map back by index
+			// (we will re-compute candidates on enter for safety)
+			m.appendLog("drop ambiguous: select piece to drop")
 			return
 		}
 
@@ -519,6 +571,24 @@ var pieceOptions = []domain.PieceKind{'P', 'L', 'N', 'S', 'G', 'B', 'R', 'K'}
 func pieceOptionItems() []string {
 	items := make([]string, 0, len(pieceOptions))
 	for _, k := range pieceOptions {
+		items = append(items, string(k))
+	}
+	return items
+}
+
+func handItems(st *domain.State) []string {
+	items := make([]string, 0, len(pieceOptions))
+	for _, k := range pieceOptions {
+		b := st.Hands[domain.Black][k]
+		w := st.Hands[domain.White][k]
+		items = append(items, fmt.Sprintf("%c  (B:%d  W:%d)", k, b, w))
+	}
+	return items
+}
+
+func dropCandidateItems(cands []domain.PieceKind) []string {
+	items := make([]string, 0, len(cands))
+	for _, k := range cands {
 		items = append(items, string(k))
 	}
 	return items
