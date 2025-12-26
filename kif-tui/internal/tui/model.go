@@ -47,8 +47,12 @@ type Model struct {
 	width  int
 	height int
 
-	pickerOn  bool
-	pickerIdx int
+	// picker (generic)
+	pickerOn    bool
+	pickerIdx   int
+	pickerTitle string
+	pickerItems []string
+	pickerMode  string // "place" / "drop" / "hand" ... (用途識別)
 }
 
 var reNumericInput = regexp.MustCompile(`^\d{3,5}$`)
@@ -78,6 +82,9 @@ func NewModel() Model {
 		logLines: []string{
 			"ready (press i to input command)",
 		},
+		pickerTitle: "",
+		pickerItems: nil,
+		pickerMode:  "",
 	}
 }
 
@@ -182,6 +189,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.place.On && !m.inPlay() {
 					m.m = modePicker
 					m.pickerOn = true
+					m.pickerMode = "place"
+					m.pickerTitle = "Piece Picker"
+					m.pickerItems = pieceOptionItems()
+
 					// 現在のKindに合わせて初期選択
 					m.pickerIdx = 0
 					for i, k := range pieceOptions {
@@ -247,13 +258,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 
 			case "enter":
-				// 選択確定：next piece を変更
-				m.place.Kind = pieceOptions[m.pickerIdx]
+				switch m.pickerMode {
+				case "place":
+					// 選択確定：next piece を変更
+					if m.pickerIdx >= 0 && m.pickerIdx < len(pieceOptions) {
+						m.place.Kind = pieceOptions[m.pickerIdx]
+						m.appendLog(fmt.Sprintf("picker select: %c", m.place.Kind))
+					} else {
+						m.appendLog("picker select: out of range")
+					}
+				default:
+					m.appendLog("picker: unhandled mode: " + m.pickerMode)
+				}
 
 				// picker終了
 				m.m = modeNormal
 				m.pickerOn = false
-				m.appendLog(fmt.Sprintf("picker select: %c", m.place.Kind))
 				return m, nil
 			}
 			return m, nil
@@ -482,7 +502,8 @@ func (m Model) View() string {
 	rightPane := lipgloss.JoinVertical(lipgloss.Top, logBox, inputBox)
 
 	if m.pickerOn {
-		pickerBox := boxStyle.Width(rightWidth).Render(renderPicker(m.pickerIdx))
+		pickerBox := boxStyle.Width(rightWidth).Render(renderPicker(m.pickerTitle, m.pickerItems, m.pickerIdx))
+
 		rightPane = lipgloss.JoinVertical(lipgloss.Top, logBox, pickerBox, inputBox)
 	}
 
@@ -495,6 +516,14 @@ func (m Model) View() string {
 // 駒配置ピッカー
 var pieceOptions = []domain.PieceKind{'P', 'L', 'N', 'S', 'G', 'B', 'R', 'K'}
 
+func pieceOptionItems() []string {
+	items := make([]string, 0, len(pieceOptions))
+	for _, k := range pieceOptions {
+		items = append(items, string(k))
+	}
+	return items
+}
+
 func clamp(n, lo, hi int) int {
 	if n < lo {
 		return lo
@@ -505,16 +534,16 @@ func clamp(n, lo, hi int) int {
 	return n
 }
 
-func renderPicker(idx int) string {
+func renderPicker(title string, items []string, idx int) string {
 	var b strings.Builder
-	b.WriteString("Piece Picker\n")
-	b.WriteString("------------\n")
-	for i, k := range pieceOptions {
+	b.WriteString(title + "\n")
+	b.WriteString(strings.Repeat("-", len(title)) + "\n")
+	for i, it := range items {
 		prefix := "  "
 		if i == idx {
 			prefix = "> "
 		}
-		b.WriteString(prefix + string(k) + "\n")
+		b.WriteString(prefix + it + "\n")
 	}
 	return b.String()
 }
