@@ -149,6 +149,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "L", "N", "S", "G", "B", "R", "K":
 				if m.place.On && !m.inPlay() {
 					m.place.Kind = domain.PieceKind(msg.String()[0])
+					m.placeAtCursor()
+				}
+			// 歩は小文字p
+			case "p":
+				if m.place.On && !m.inPlay() {
+					m.place.Kind = 'p'
+					m.placeAtCursor()
 				}
 
 			// place piece at cursor (EDIT only)
@@ -213,6 +220,11 @@ func (m *Model) moveCursor(df, dr int) {
 // placeAtCursor places the current "next piece" to the cursor square.
 // After placement, it resets the "next piece" state (Python版挙動に寄せる).
 func (m *Model) placeAtCursor() {
+	// PLAY なら何もしない
+	if m.inPlay() {
+		return
+	}
+
 	p := &domain.Piece{
 		Color: m.place.Color,
 		Kind:  m.place.Kind,
@@ -380,7 +392,8 @@ func (m Model) View() string {
 	}
 
 	// ---- Board (left pane) ----
-	boardBody := RenderBoard(m.st, m.cursor)
+	next := domain.Piece{Color: m.place.Color, Kind: m.place.Kind, Prom: m.place.Promote}
+	boardBody := RenderBoard(m.st, m.cursor, m.place.On && !m.inPlay(), next)
 
 	// 盤面は折り返しが致命的なので、十分に幅を確保する（Logパネルは狭くてもOK)
 	boardW := 38

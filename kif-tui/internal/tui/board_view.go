@@ -9,7 +9,7 @@ import (
 // RenderBoard renders current position (m.st) in a fixed-width grid.
 // Coordinate: [File 9..1] x [Rank 1..9] (KIF-style).
 // We intentionally keep it plain and stable for UX/readability.
-func RenderBoard(st *domain.State, cursor domain.Square) string {
+func RenderBoard(st *domain.State, cursor domain.Square, placementOn bool, next domain.Piece) string {
 	// Files header: ９..１
 	// Use ASCII digits for now to avoid width issues; we keep columns aligned.
 	// You can switch to full-width digits later if you prefer.
@@ -27,7 +27,7 @@ func RenderBoard(st *domain.State, cursor domain.Square) string {
 			sq := domain.Square{File: f, Rank: r}
 			p := st.PieceAt(sq)
 			isCursor := (sq == cursor)
-			b.WriteString(cell(p, isCursor))
+			b.WriteString(cell(p, isCursor, placementOn, next))
 		}
 		b.WriteString("|\n")
 	}
@@ -41,22 +41,32 @@ func RenderBoard(st *domain.State, cursor domain.Square) string {
 // Promoted pieces are shown with '+' prefix-like marker by using lowercase mapping,
 // but we keep it simple: same kind letter with a leading marker.
 // Later you can switch to full Japanese piece glyphs safely.
-func cell(p *domain.Piece, isCursor bool) string {
+func cell(p *domain.Piece, isCursor bool, placementOn bool, next domain.Piece) string {
+	// 空マス + カーソル + placement ON → next をプレビュー
 	if p == nil {
+		if isCursor && placementOn {
+			return "[" + pieceStr(&next) + "]"
+		}
 		if isCursor {
 			return "[.]"
 		}
 		return " . "
 	}
 
-	tri := "▲"
-	if p.Color == domain.White {
-		tri = "▽"
-	}
-	s := tri + string(p.Kind)
-
+	s := pieceStr(p)
 	if isCursor {
 		return "[" + s + "]"
 	}
 	return " " + s + " "
+}
+
+func pieceStr(p *domain.Piece) string {
+	if p == nil {
+		return "."
+	}
+	tri := "▲"
+	if p.Color == domain.White {
+		tri = "▽"
+	}
+	return tri + string(p.Kind)
 }
