@@ -20,11 +20,24 @@ const (
 	modeInput
 )
 
+// PlaceState represents the "continuous placement" mode state (EDIT only).
+// - On: placement mode enabled/disabled
+// - Color: side of the piece to place (Black/White)
+// - Kind: piece kind to place ('P','L','N','S','G','B','R','K')
+// - Promote: promote flag for the placed piece
+type PlaceState struct {
+	On      bool
+	Color   domain.Color
+	Kind    domain.PieceKind
+	Promote bool
+}
+
 type Model struct {
 	st            *domain.State
 	startSnapshot *domain.Snapshot // nil=EDIT, non-nil=PLAY
 
 	cursor domain.Square
+	place  PlaceState
 
 	m        mode
 	input    textinput.Model
@@ -48,8 +61,14 @@ func NewModel() Model {
 	return Model{
 		st:     st,
 		cursor: domain.Square{File: 5, Rank: 5}, // 中央
-		m:      modeNormal,
-		input:  ti,
+		place: PlaceState{
+			On:      false,
+			Color:   domain.Black,
+			Kind:    'P',
+			Promote: false,
+		},
+		m:     modeNormal,
+		input: ti,
 		logLines: []string{
 			"ready (press i to input command)",
 		},
@@ -69,18 +88,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch m.m {
+
+		// ----------------------------
+		// NORMAL mode (vim-like)
+		// ----------------------------
 		case modeNormal:
 			switch msg.String() {
 			case "q", "ctrl+c":
 				return m, tea.Quit
+
 			case "i":
+				// enter INPUT (command) mode
 				m.m = modeInput
 				m.input.SetValue("")
 				m.input.Focus()
 				m.appendLog("INPUT mode")
 				return m, nil
 
-			// --- cursor move ---
+			// --- cursor move (hjkl + arrows) ---
+			// NOTE: board is rendered with files 9..1 left->right,
+			// so "left" means file+1, "right" means file-1.
 			case "h", "left":
 				m.moveCursor(+1, 0)
 			case "l", "right":
@@ -89,10 +116,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveCursor(0, -1)
 			case "j", "down":
 				m.moveCursor(0, +1)
+
+			// --- placement mode toggle (EDIT only) ---
+			case "P":
+				if m.inPlay() {
+					m.appendLog("cannot edit in PLAY (use clear/reset)")
+					return m, nil
+				}
+				m.place.On = !m.place.On
+				if m.place.On {
+					m.appendLog("placement ON (P/L/N/S/G/B/R/K, v toggle, + promote, space/enter place, x delete)")
+				} else {
+					m.appendLog("placement OFF")
+				}
+
+			// --- placement controls (only when placement ON) ---
+			case "v":
+				if m.place.On && !m.inPlay() {
+					if m.place.Color == domain.Black {
+						m.place.Color = domain.White
+					} else {
+						m.place.Color = domain.Black
+					}
+				}
+
+			case "+":
+				if m.place.On && !m.inPlay() {
+					m.place.Promote = !m.place.Promote
+				}
+
+			// choose piece kind (uppercase)
+			case "L", "N", "S", "G", "B", "R", "K":
+				if m.place.On && !m.inPlay() {
+					m.place.Kind = domain.PieceKind(msg.String()[0])
+				}
+
+			// place piece at cursor (EDIT only)
+			case " ", "enter":
+				if m.place.On && !m.inPlay() {
+					m.placeAtCursor()
+				}
+
+			// delete piece at cursor (EDIT only)
+			case "x":
+				if m.place.On && !m.inPlay() {
+					m.st.SetPieceAt(m.cursor, nil)
+				}
 			}
 
 			return m, nil
 
+		// ----------------------------
+		// INPUT mode (command line)
+		// ----------------------------
 		case modeInput:
 			switch msg.String() {
 			case "esc":
@@ -100,6 +176,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.Blur()
 				m.appendLog("NORMAL mode")
 				return m, nil
+
 			case "enter":
 				cmdline := strings.TrimSpace(m.input.Value())
 				m.input.SetValue("")
@@ -131,6 +208,22 @@ func (m *Model) moveCursor(df, dr int) {
 	}
 
 	m.cursor = domain.Square{File: f, Rank: r}
+}
+
+// placeAtCursor places the current "next piece" to the cursor square.
+// After placement, it resets the "next piece" state (Python版挙動に寄せる).
+func (m *Model) placeAtCursor() {
+	p := &domain.Piece{
+		Color: m.place.Color,
+		Kind:  m.place.Kind,
+		Prom:  m.place.Promote,
+	}
+	m.st.SetPieceAt(m.cursor, p)
+
+	// 状態自動リセット（置いた後に迷わない）
+	m.place.Color = domain.Black
+	m.place.Kind = 'P'
+	m.place.Promote = false
 }
 
 func (m *Model) execCommand(line string) {
@@ -268,6 +361,24 @@ func (m Model) View() string {
 	}
 	header := titleStyle.Render(fmt.Sprintf("kif-tui  [%s]  mode:%s", status, modeStr))
 
+	// placement status line (helps UX)
+	placeStatus := "PLAY MODE"
+	if !m.inPlay() {
+		if m.place.On {
+			side := "▲"
+			if m.place.Color == domain.White {
+				side = "▽"
+			}
+			prom := ""
+			if m.place.Promote {
+				prom = "+"
+			}
+			placeStatus = fmt.Sprintf("PLACEMENT: ON  next=%s%c%s  (space/enter place, x delete, v,+)", side, m.place.Kind, prom)
+		} else {
+			placeStatus = "PLACEMENT: OFF  (press P to toggle)"
+		}
+	}
+
 	// ---- Board (left pane) ----
 	boardBody := RenderBoard(m.st, m.cursor)
 
@@ -278,13 +389,12 @@ func (m Model) View() string {
 	// 右は残り（最低幅だけ保証）
 	rightWidth := max(20, m.width-2-boardW-1)
 
-	logHeight := max(5, m.height-6) // keep similar to previous
+	logHeight := max(5, m.height-7) // header+status分を少し引く
 	logStart := max(0, len(m.logLines)-logHeight)
 	logBody := strings.Join(m.logLines[logStart:], "\n")
 
 	// 長い行で横に崩れないように、右ペイン幅に収める
 	inner := lipgloss.NewStyle().Width(max(10, rightWidth-2)).Render(logBody)
-
 	logBox := boxStyle.Width(rightWidth).Height(logHeight).Render(inner)
 
 	// ---- Input (right-bottom) ----
@@ -301,7 +411,7 @@ func (m Model) View() string {
 	// Join 2 columns
 	body := lipgloss.JoinHorizontal(lipgloss.Top, boardBox, rightPane)
 
-	return header + "\n" + body + "\n"
+	return header + "\n" + placeStatus + "\n" + body + "\n"
 }
 
 func min(a, b int) int {
