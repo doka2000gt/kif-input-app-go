@@ -232,10 +232,13 @@ func (m *Model) placeAtCursor() {
 	}
 	m.st.SetPieceAt(m.cursor, p)
 
-	// 状態自動リセット（置いた後に迷わない）
+	// 配置後だけリセット（空マスでは next を保持）
 	m.place.Color = domain.Black
 	m.place.Kind = 'P'
 	m.place.Promote = false
+
+	// 配置後に自動で1マス下へ（連続配置を快適に）
+	m.moveCursor(0, +1)
 }
 
 func (m *Model) execCommand(line string) {
