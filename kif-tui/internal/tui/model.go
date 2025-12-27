@@ -417,6 +417,10 @@ func (m *Model) execCommand(line string) {
 		snap := m.st.CloneSnapshot()
 		m.startSnapshot = &snap
 		m.st.Moves = nil
+
+		// PLAY 開始時は必ず先手番から
+		m.st.SideToMove = domain.Black
+
 		m.appendLog("game started (PLAY)")
 
 	case "setup":
