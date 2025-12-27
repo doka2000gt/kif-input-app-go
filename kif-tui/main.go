@@ -1,13 +1,18 @@
 package main
 
 import (
-	"log"
+	"fmt"
+	"os"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"kif-tui/internal/tui"
 )
 
 func main() {
-	if err := tui.Run(); err != nil {
-		log.Fatal(err)
+	p := tea.NewProgram(tui.NewModel(), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }
