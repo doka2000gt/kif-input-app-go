@@ -43,7 +43,9 @@ type Model struct {
 	logLines []string
 
 	// KIF preview pane (right side)
-	kifPreview string
+	kifPreview  string
+	kifViewport viewport.Model
+	kifVPReady  bool
 
 	width  int
 	height int
@@ -94,7 +96,9 @@ func NewModel() Model {
 			"ready (press i or : to input command)",
 		},
 
-		kifPreview: "",
+		kifPreview:  "",
+		kifViewport: viewport.Model{},
+		kifVPReady:  false,
 
 		pickerOn:        false,
 		pickerIdx:       0,
@@ -117,6 +121,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.input.Width = min(80, max(30, m.width-4))
+
+		// --- KIF viewport init/update ---
+		rightWidth := max(20, m.width-2-38-1) // boardW=38 を仮定
+		kifH := 10
+		if m.height > 30 {
+			kifH = 12
+		}
+
+		if !m.kifVPReady {
+			m.kifViewport = viewport.New(rightWidth-2, kifH-2)
+			m.kifViewport.SetContent(m.kifPreview)
+			m.kifVPReady = true
+		} else {
+			m.kifViewport.Width = rightWidth - 2
+			m.kifViewport.Height = kifH - 2
+		}
+
 		return m, nil
 
 	case tea.KeyMsg:
@@ -147,6 +168,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveCursor(0, -1)
 			case "j", "down":
 				m.moveCursor(0, +1)
+
+			// --- KIF viewport scroll (no conflict with piece keys) ---
+			case "ctrl+j":
+				m.kifViewport.LineDown(1)
+				return m, nil
+			case "ctrl+k":
+				m.kifViewport.LineUp(1)
+				return m, nil
+			case "ctrl+f", "pgdown":
+				m.kifViewport.PageDown()
+				return m, nil
+			case "ctrl+b", "pgup":
+				m.kifViewport.PageUp()
+				return m, nil
+			case "home":
+				m.kifViewport.GotoTop()
+				return m, nil
+			case "end":
+				m.kifViewport.GotoBottom()
+				return m, nil
 
 			// placement toggle (EDIT only)
 			case "P":
@@ -449,6 +490,12 @@ func (m *Model) execCommand(line string) {
 		}
 		out := kif.GenerateKIF(*start, m.st.Moves, kif.DefaultKIFOptions())
 		m.kifPreview = strings.TrimRight(out, "\n")
+
+		if m.kifVPReady {
+			m.kifViewport.SetContent(m.kifPreview)
+			m.kifViewport.GotoTop()
+		}
+
 		m.appendLog("KIF updated")
 
 	default:
@@ -667,10 +714,15 @@ func (m Model) View() string {
 	if kifBody == "" {
 		kifBody = "(no KIF yet: type `kif`)"
 	}
-	kifInner := lipgloss.NewStyle().Width(max(10, rightWidth-2)).Render(
-		kifTitle + "\n" + strings.Repeat("-", len(kifTitle)) + "\n" + kifBody,
-	)
-	kifBox := boxStyle.Width(rightWidth).Height(kifH).Render(kifInner)
+	kifInner := m.kifViewport.View()
+	if strings.TrimSpace(kifInner) == "" {
+		kifInner = "(no KIF yet: type `kif`)"
+	}
+
+	kifBox := boxStyle.
+		Width(rightWidth).
+		Height(kifH).
+		Render(kifTitle + "\n" + strings.Repeat("-", len(kifTitle)) + "\n" + kifInner)
 
 	var inputLine string
 	if m.m == modeInput || m.m == modeHandEdit {
