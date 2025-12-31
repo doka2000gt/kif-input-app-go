@@ -42,6 +42,9 @@ type Model struct {
 	input    textinput.Model
 	logLines []string
 
+	// KIF preview pane (right side)
+	kifPreview string
+
 	width  int
 	height int
 
@@ -53,20 +56,19 @@ type Model struct {
 	pickerMode  string // "place" / "drop" / "hand"
 
 	// drop picker payload
-	pickerDropTo domain.Square
+	pickerDropTo    domain.Square
+	pickerDropCands []domain.PieceKind
 
 	// hand edit
 	handEditKind domain.PieceKind
 }
 
-var (
-	// numeric input (7776 / 77761 / 076)
-	reNumericInput = regexp.MustCompile(`^\d{3,5}$`)
+// numeric input (7776 / 77761 / 076)
+var reNumericInput = regexp.MustCompile(`^\d{3,5}$`)
 
-	// hand edit accepts: "B=2 W=0" or "2 0"
-	reHandEdit = regexp.MustCompile(`(?i)^\s*(?:B\s*=\s*(\d+)\s*)?(?:\s*[,; ]\s*)?(?:W\s*=\s*(\d+)\s*)?\s*$`)
-	reTwoNums  = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s*$`)
-)
+// hand edit accepts: "B=2 W=0" or "2 0"
+var reHandEdit = regexp.MustCompile(`(?i)^\s*(?:B\s*=\s*(\d+)\s*)?(?:\s*[,; ]\s*)?(?:W\s*=\s*(\d+)\s*)?\s*$`)
+var reTwoNums = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s*$`)
 
 func NewModel() Model {
 	ti := textinput.New()
@@ -76,25 +78,33 @@ func NewModel() Model {
 	ti.Width = 60
 
 	st := domain.NewStateEmpty()
-	// EDIT中は先手番想定（混乱防止）
-	st.SideToMove = domain.Black
 
 	return Model{
 		st:     st,
 		cursor: domain.Square{File: 5, Rank: 5},
-
 		place: PlaceState{
 			On:      false,
 			Color:   domain.Black,
 			Kind:    'P',
 			Promote: false,
 		},
-
 		m:     modeNormal,
 		input: ti,
 		logLines: []string{
 			"ready (press i or : to input command)",
 		},
+
+		kifPreview: "",
+
+		pickerOn:        false,
+		pickerIdx:       0,
+		pickerTitle:     "",
+		pickerItems:     nil,
+		pickerMode:      "",
+		pickerDropTo:    domain.Square{File: 0, Rank: 0},
+		pickerDropCands: nil,
+
+		handEditKind: 'P',
 	}
 }
 
@@ -264,7 +274,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				switch m.pickerMode {
 				case "place":
-					// pickerItems are strings like "P", "L", ...
 					if len(m.pickerItems) > 0 {
 						m.place.Kind = domain.PieceKind(m.pickerItems[m.pickerIdx][0])
 						m.appendLog(fmt.Sprintf("picker select: %c", m.place.Kind))
@@ -289,7 +298,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 
 				case "drop":
-					// pickerItems = ["G", "P", ...]
 					if len(m.pickerItems) == 0 {
 						m.appendLog("drop picker empty")
 						m.closePicker("")
@@ -417,10 +425,8 @@ func (m *Model) execCommand(line string) {
 		snap := m.st.CloneSnapshot()
 		m.startSnapshot = &snap
 		m.st.Moves = nil
-
-		// PLAY 開始時は必ず先手番から
+		// PLAY開始時は必ず先手番から
 		m.st.SideToMove = domain.Black
-
 		m.appendLog("game started (PLAY)")
 
 	case "setup":
@@ -442,10 +448,8 @@ func (m *Model) execCommand(line string) {
 			start = &s
 		}
 		out := kif.GenerateKIF(*start, m.st.Moves, kif.DefaultKIFOptions())
-		m.appendLog("KIF preview:")
-		for _, ln := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-			m.appendLog("  " + ln)
-		}
+		m.kifPreview = strings.TrimRight(out, "\n")
+		m.appendLog("KIF updated")
 
 	default:
 		m.appendLog(fmt.Sprintf("unknown command: %s", parts[0]))
@@ -535,6 +539,7 @@ func (m *Model) openPickerDrop(to domain.Square, cands []domain.PieceKind) {
 	m.pickerItems = dropCandidateItems(cands)
 	m.pickerIdx = 0
 	m.pickerDropTo = to
+	m.pickerDropCands = cands
 	m.appendLog("drop ambiguous: select piece to drop")
 }
 
@@ -547,6 +552,7 @@ func (m *Model) closePicker(logLine string) {
 	m.pickerItems = nil
 	m.pickerMode = ""
 	m.pickerDropTo = domain.Square{File: 0, Rank: 0}
+	m.pickerDropCands = nil
 	if logLine != "" {
 		m.appendLog(logLine)
 	}
@@ -564,10 +570,12 @@ func (m Model) View() string {
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1)
 
+	// --- status / mode ---
 	status := "EDIT"
 	if m.inPlay() {
 		status = "PLAY"
 	}
+
 	modeStr := "NORMAL"
 	switch m.m {
 	case modeInput:
@@ -589,11 +597,11 @@ func (m Model) View() string {
 		turnLabel = fmt.Sprintf("%s EDIT", turnMark)
 	}
 
-	// ヘッダは背景付きバーにして見えなくなる問題を回避
+	// top header (aesthetics)
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("0")).
-		Background(lipgloss.Color("7")).
+		Foreground(lipgloss.Color("0")). // black
+		Background(lipgloss.Color("7")). // light bg
 		Padding(0, 1).
 		Width(max(20, m.width))
 
@@ -601,28 +609,68 @@ func (m Model) View() string {
 		fmt.Sprintf("kif-tui  [%s]  TURN:%s  mode:%s", status, turnLabel, modeStr),
 	)
 
+	// placement status (for UX)
+	placeStatus := "PLAY MODE"
+	if !m.inPlay() {
+		if m.place.On {
+			side := "▲"
+			if m.place.Color == domain.White {
+				side = "▽"
+			}
+			prom := ""
+			if m.place.Promote {
+				prom = "+"
+			}
+			placeStatus = fmt.Sprintf("PLACEMENT: ON  next=%s%c%s", side, m.place.Kind, prom)
+		} else {
+			placeStatus = "PLACEMENT: OFF  (press P to toggle)"
+		}
+	}
+
 	// ---- left: board ----
 	next := domain.Piece{Color: m.place.Color, Kind: m.place.Kind, Prom: m.place.Promote}
 	boardBody := RenderBoard(m.st, m.cursor, m.place.On && !m.inPlay(), next)
 
+	// board width: keep wide enough to avoid wrapping
 	boardW := 38
 	boardBox := boxStyle.Width(boardW).Render(boardBody)
 
-	// ---- right: logs + picker + input ----
+	// ---- right: logs + kif + picker + input ----
 	rightWidth := max(20, m.width-2-boardW-1)
 
-	logHeight := max(5, m.height-7)
-	logStart := max(0, len(m.logLines)-logHeight)
-	statusLine := fmt.Sprintf(
-		"[%s] TURN:%s mode:%s",
-		status, turnLabel, modeStr,
-	)
+	// Status line is duplicated here so it is always visible even if the top header scrolls away.
+	statusLine := fmt.Sprintf("[%s] TURN:%s mode:%s", status, turnLabel, modeStr)
 
-	logBody := statusLine + "\n" +
-		strings.Repeat("-", len(statusLine)) + "\n" +
+	// Rough height budgeting (border boxes consume space; we keep it simple and stable).
+	inputH := 3
+	kifH := 10
+	if m.height > 30 {
+		kifH = 12
+	}
+	pickerH := 0
+	if m.pickerOn {
+		// title + items + borders (approx)
+		pickerH = min(12, 3+len(m.pickerItems))
+	}
+
+	avail := max(12, m.height-2) // keep some minimum
+	logH := max(6, avail-inputH-kifH-pickerH)
+
+	logStart := max(0, len(m.logLines)-max(0, logH-3))
+	logBody := statusLine + "\n" + strings.Repeat("-", len(statusLine)) + "\n" +
 		strings.Join(m.logLines[logStart:], "\n")
 	innerLog := lipgloss.NewStyle().Width(max(10, rightWidth-2)).Render(logBody)
-	logBox := boxStyle.Width(rightWidth).Height(logHeight).Render(innerLog)
+	logBox := boxStyle.Width(rightWidth).Height(logH).Render(innerLog)
+
+	kifTitle := "KIF"
+	kifBody := strings.TrimSpace(m.kifPreview)
+	if kifBody == "" {
+		kifBody = "(no KIF yet: type `kif`)"
+	}
+	kifInner := lipgloss.NewStyle().Width(max(10, rightWidth-2)).Render(
+		kifTitle + "\n" + strings.Repeat("-", len(kifTitle)) + "\n" + kifBody,
+	)
+	kifBox := boxStyle.Width(rightWidth).Height(kifH).Render(kifInner)
 
 	var inputLine string
 	if m.m == modeInput || m.m == modeHandEdit {
@@ -630,12 +678,14 @@ func (m Model) View() string {
 	} else {
 		inputLine = "press i or : to enter command"
 	}
-	inputBox := boxStyle.Width(rightWidth).Render(inputLine)
+	inputBox := boxStyle.Width(rightWidth).Height(inputH).Render(inputLine)
 
-	rightPane := lipgloss.JoinVertical(lipgloss.Top, logBox)
+	rightPane := lipgloss.JoinVertical(lipgloss.Top, logBox, kifBox)
 
 	if m.pickerOn {
-		pickerBox := boxStyle.Width(rightWidth).Render(renderPicker(m.pickerTitle, m.pickerItems, m.pickerIdx))
+		pickerBox := boxStyle.Width(rightWidth).Height(pickerH).Render(
+			renderPicker(m.pickerTitle, m.pickerItems, m.pickerIdx),
+		)
 		rightPane = lipgloss.JoinVertical(lipgloss.Top, rightPane, pickerBox)
 	}
 
@@ -643,7 +693,8 @@ func (m Model) View() string {
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, boardBox, rightPane)
 
-	return header + "\n" + body + "\n"
+	// Top header is kept for aesthetics; the statusLine in the right pane is the "always visible" one.
+	return header + "\n" + placeStatus + "\n" + body + "\n"
 }
 
 // piece order used by picker
